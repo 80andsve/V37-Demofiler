@@ -34,17 +34,29 @@ inget client-id, precis det som sägs på identitets-sliden i Del 11A.
 
 ## Det som behöver ändras
 
-I `app.py`, längst upp, finns ett tydligt markerat block:
+I `app.py`, längst upp, finns ett markerat block med tre inställningar. Bara
+den första måste ändras för att grunden ska fungera, de andra två styr hur
+ärendet hanteras vidare:
 
-    STORAGE_ACCOUNT = "stnovatrixXXXX"
-    CONTAINER = "arenden"
+`STORAGE_ACCOUNT` byts mot ditt eget globalt unika kontonamn (samma konto som
+provisioneringen skapade). Behåll `CONTAINER` som `arenden` om du inte döpt om den.
 
-Byt `STORAGE_ACCOUNT` mot ditt eget globalt unika kontonamn (samma konto som
-provisioneringen skapade). Behåll `CONTAINER` som `arenden` om du inte döpt om
-den. Inget annat behöver röras för att grunden ska fungera.
+`BLOB_LAYOUT` styr var ärendet hamnar i containern:
+
+- `"root"` (standard) lägger ärendet platt i roten som `arende-<id>.json`. Det
+  behövs om du senare ska trigga ett Power Automate-flöde på bloben, eftersom
+  Blob-triggern bara ser roten.
+- `"folder"` lägger ärendet i en egen mapp per ärende som `<id>/arende.json`.
+  Prydligare, men Blob-triggern ser inte undermappar.
+
+`FLOW_URL` lämnas tom så länge du inte har ett flöde. Fyller du i adressen från
+en HTTP-trigger i Power Automate ("När en HTTP-förfrågan tas emot") postar appen
+ärendet dit direkt efter att bloben skrivits. Anropet är inlindat så att ett
+trasigt flöde aldrig stoppar att ärendet sparas.
 
 Ändrar man i `app.py` måste ändringen även in i `cloud-init.txt` (samma kod
-ligger inbäddad där), eftersom det är `cloud-init.txt` som faktiskt driftsätts.
+ligger inbäddad där), eftersom det är `cloud-init.txt` som driftsätts när VM:en
+skapas från grunden.
 
 ## Förutsättningar
 
@@ -68,9 +80,57 @@ för basversionen. Kärnan i kommandot:
       --nsg "" \
       ...
 
-Har du redan en körande VM räcker det att lägga in samma innehåll och köra om
-`cloud-init`, men enklast för er är att skapa VM:en med rätt custom-data
-från början.
+Skapar du VM:en så här får du hela grunden på plats från start, med de värden du
+satt i `cloud-init.txt`.
+
+## Uppdatera bara app.py på en VM som redan kör
+
+Har du redan en körande webb-VM och bara vill ha in den nya app.py (till exempel
+för att byta layout eller slå på ett flöde), behöver du inte skapa om VM:en. Byt
+ut filen på plats och starta om tjänsten. Välj det sätt du är bekväm med.
+
+### Alternativ A, redigera direkt på VM:en (nano)
+
+Logga in på VM:en (via Bastion eller SSH) och öppna filen:
+
+    sudo nano /opt/arendeapp/app.py
+
+Sätt de tre inställningarna högst upp till dina egna värden:
+
+- `STORAGE_ACCOUNT` till ditt kontonamn (samma som förut).
+- `BLOB_LAYOUT` till `"root"` eller `"folder"` beroende på om du ska köra Blob-trigger.
+- `FLOW_URL` till din HTTP-triggeradress om du använder den vägen, annars tom.
+
+Spara med Ctrl+O och Enter, avsluta med Ctrl+X.
+
+### Alternativ B, kopiera upp din färdiga fil (scp)
+
+Har du redan fyllt i rätt värden i din lokala `app.py` kan du kopiera upp den i
+stället. `/opt/arendeapp` ägs av root, så lägg filen i `/tmp` först och flytta
+den sedan på plats:
+
+    scp -i <din-nyckel> app.py azureuser@<publik-ip>:/tmp/app.py
+
+Logga sedan in på VM:en och flytta filen dit den ska:
+
+    sudo mv /tmp/app.py /opt/arendeapp/app.py
+
+Kör du via Bastion i stället för direkt SSH, använd `az network bastion tunnel`
+för att öppna en lokal port mot VM:en och kör `scp` mot den porten.
+
+### Starta om och verifiera (båda alternativen)
+
+Starta om backenden så att den läser den nya koden:
+
+    sudo systemctl restart arendeapp
+
+Kontrollera att den kom upp och läser rätt värden:
+
+    curl http://localhost:5000/health
+
+Hälsokollen svarar nu med `blob_layout` och `flow_configured`, så du ser direkt
+att layouten stämmer och om en flödesadress är inlagd. Gamla ärenden i lagringen
+påverkas inte, ändringen gäller nya ärenden som skickas in efter omstarten.
 
 ## Testa
 
@@ -83,6 +143,9 @@ hamnade i lagringen:
       --container-name arenden \
       --auth-mode login \
       --output table
+
+Med standardläget `root` ligger ärendet som `arende-<id>.json` direkt i roten. Har
+du valt `folder` ligger det som `<id>/arende.json` i stället.
 
 Backenden har också en enkel hälsokoll:
 
@@ -102,4 +165,5 @@ ligga kvar på servern, eftersom det skriver via identiteten).
 Backenden kör Flasks inbyggda utvecklingsserver, vilket räcker gott för labben.
 I skarp drift skulle man sätta gunicorn framför och köra sidan över HTTPS. Håll
 publik åtkomst till lagringen stängd, det är hela poängen med att gå via
-identiteten i stället för nyckel.
+identiteten i stället för nyckel. `FLOW_URL` innehåller en hemlig signatur, så i
+skarp drift hör den hemma i en miljövariabel, inte hårdkodad i källan.
