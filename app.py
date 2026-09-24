@@ -101,6 +101,7 @@ def submit():
     container = _container()
     image_filename = image.filename if (image is not None and image.filename) else None
     ticket_name, image_name = _blob_names(ticket_id, image_filename)
+    ticket["image"] = image_name or ""
 
     # 1) Store the ticket itself as a JSON blob.
     container.upload_blob(
